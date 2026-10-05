@@ -1,0 +1,1 @@
+V9 fixes homepage doctor profile blocking, 7-day trial text, Schedule/History doctor session handling, secure schedule RPC, and profile photo RPC. Run V9_DATABASE_FIXES.sql once, then deploy index.html to Cloudflare. No existing data is deleted.

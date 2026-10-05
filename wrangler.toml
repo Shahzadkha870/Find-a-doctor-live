@@ -1,0 +1,15 @@
+name = "find-a-doctor-live"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+
+[durable_objects]
+bindings = [
+  { name = "QUEUE_ROOM", class_name = "QueueRoom" }
+]
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["QueueRoom"]
+
+[vars]
+# Set LIVE_WORKER_URL in the frontend to your deployed Worker URL.
