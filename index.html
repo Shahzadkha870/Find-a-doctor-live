@@ -714,7 +714,7 @@ function setAuthCopy(){
 }
 
 /* Cloudflare Durable Object live queue client. Supabase remains authoritative. */
-const LIVE_WORKER_URL = window.DQ_LIVE_WORKER_URL || '';
+const LIVE_WORKER_URL = 'https://find-a-doctor-live.shahzadlkani61.workers.dev';
 const liveQueueSockets = new Map();
 function liveQueueUrl(doctorId){
   if(!LIVE_WORKER_URL || !doctorId) return '';
@@ -1110,6 +1110,7 @@ async function searchDoctorsByNameOrCategory(){
 }
 
 function doctorCard(d,search=false){
+ if(d?.id) doctorProfileCache.set(String(d.id),d);
  const fee=Number(d.fee||0).toLocaleString();
  const specialties=storedDoctorSpecialties(d).split(',').map(x=>x.trim()).filter(Boolean).join(' • '); const category=storedDoctorCategory(d);
  const clinic=d.clinic_name||d.clinic_address||'Clinic';
@@ -1227,6 +1228,7 @@ function bookingDateChoicesHtml(){
 }
 function selectDoctorBookingDate(key){const input=document.getElementById('bookingDate');if(input){input.value=key;updateDoctorBookingDate(input.dataset.doctorId||'');}}
 function categoryDoctorCard(d){
+ if(d?.id) doctorProfileCache.set(String(d.id),d);
  const fee=Number(d.fee||0).toLocaleString(),clinic=doctorClinic(d),cat=storedDoctorCategory(d)||storedDoctorSpecialties(d)||d.specialty||'Doctor';
  const live=Number(d.__liveToken||0),waiting=Number(d.__waiting||0);
  const timing=(d.clinic_start_time||'09:00')+' - '+(d.clinic_end_time||'17:00');
@@ -1337,39 +1339,115 @@ async function getPublicQueueState(doctorId){
 }
 
 const profileSubscriptionCache=new Map();
+const doctorProfileCache=new Map();
 async function openDoctorProfile(id){
-  // Open immediately. No subscription/review/queue RPC is allowed to block the profile UI.
   const profileOverlay=document.getElementById('doctorProfileOverlay');
   const profileContent=document.getElementById('doctorProfileContent');
   if(!profileOverlay||!profileContent)return;
+
+  const doctorId=String(id||'');
+
   profileOverlay.style.display='flex';
-  profileContent.innerHTML=`<div class="panel" style="margin:20px;max-width:620px;margin-left:auto;margin-right:auto;text-align:center"><div style="font-size:32px">🩺</div><h3>Loading doctor profile…</h3><p style="color:var(--muted)">Loading clinic information…</p></div>`;
-  if(!supabaseReady()){profileContent.innerHTML='<div class="panel" style="margin:20px"><h3>Doctor profile unavailable</h3><p>Supabase is not connected.</p></div>';return}
-  const {data:doc,error}=await sb.from('doctors').select('*').eq('id',id).maybeSingle();
-  if(error||!doc){profileContent.innerHTML=`<div class="panel" style="margin:20px"><h3>Doctor profile unavailable</h3><p>${esc(error?.message||'Doctor not found.')}</p></div>`;return}
 
-  // Render immediately using safe defaults. Secondary data loads after the profile is visible.
-  const todayKey=dateKeyPakistan();
-  const maxKey=dateKeyLocal(addDaysLocal(pakistanDate(),6));
-  const doctorWorksTodayFlag=doctorWorksToday(doc,pakistanDate());
-  const doctorOpenNow=doctorWorksTodayFlag && doctorWithinClinicHours(doc,null);
-  const profileStatus=!doc.active?'⚪ Unavailable':(doctorOpenNow?'🟢 Available':'⚪ Clinic closed now');
-  const isDoctor=!!(currentUser?.role==='doctor' && doc.user_id===currentUser.id);
-  let reviews=[];
-  let liveQueue={current_token:0,waiting:0,activeBookings:0,paused:false};
-  const reviewRows='<div id="profileReviewsLoading" class="notice">Loading reviews…</div>';
+  let doc=null;
 
-  profileContent.innerHTML=`<div class="profileHero"><img src="${doctorImage(doc)}" alt="${esc(doc.name||'Doctor')}"><div><div class="eyebrow" style="color:#bde7e3">Doctor profile</div><h1 class="profileName">${esc(doc.name||'Doctor')}</h1><div class="profileSpec">${String(doc.specialty||'').split(',').map(x=>x.trim()).filter(Boolean).map(x=>`<span class="pill" style="margin:3px 4px 3px 0;background:rgba(255,255,255,.16);color:white">${esc(x)}</span>`).join('')} • ${esc(doc.clinic_name||doc.clinic_address||'')}</div><div class="profileStats"><span class="profileStat"><b id="profileAvg">—</b> ★ rating</span><span class="profileStat"><b id="profileReviewCount">0</b> reviews</span><span class="profileStat"><b>Rs ${Number(doc.fee||0).toLocaleString()}</b> consultation</span><span class="profileStat"><b>10</b> min avg.</span></div></div><div class="profileHeroAction"><span class="pill">${profileStatus}</span></div></div><div class="profileBody"><aside class="profileSection profileBookingSection"><div class="eyebrow">BOOKING</div><h3 style="margin:3px 0 4px">Book with ${esc(doc.name||'Doctor')}</h3><p style="color:var(--muted);line-height:1.6">${esc(doc.city||'')} • ${esc(doc.clinic_name||doc.clinic_address||'')}</p><p style="color:var(--muted);line-height:1.6">Clinic timing: ${formatTime12(doc.clinic_start_time||'09:00')} – ${formatTime12(doc.clinic_end_time||'17:00')} • ${esc(doc.working_days||'Mon–Fri')}</p><div class="formGroup" style="margin:10px 0"><label>Booking date</label><input id="bookingDate" data-doctor-id="${id}" type="date" min="${todayKey}" max="${maxKey}" value="${todayKey}" onchange="updateDoctorBookingDate('${id}')"><div class="bookingDateChoices">${bookingDateChoicesHtml()}</div><div id="bookingDateStatus" style="font-size:11px;color:var(--muted);margin-top:7px">Checking date availability…</div></div><div class="panel" style="margin:14px 0;background:#f1fbfa;border-color:#c9ebe7"><div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center"><span class="pill">${doctorOpenNow?'🟢 Live queue':'📋 Today\'s queue'}</span><b id="profileQueueNow">${doctorOpenNow?'Now serving':'Last served token'} ${liveQueue.current_token}</b><span id="profileQueueWaiting">${doctorOpenNow?'0 waiting':'Live waiting count is shown during clinic hours'}</span><span class="pill" id="profileQueueActive">🎟️ 0 active bookings</span></div></div><div class="formGroup"><label>Patient name</label><input id="guestPatientName" type="text" placeholder="Your name"></div><div class="formGroup"><label>WhatsApp/Phone number</label><input id="guestPatientPhone" type="tel" inputmode="tel" autocomplete="tel" placeholder="03xx-xxxxxxx"></div><div id="guestNotifyStatus" class="notice" style="margin:10px 0;font-size:12px">🔔 Notifications are optional. Booking can continue without them.</div><div class="profileAction"><button class="btn primary bookingPrimary" type="button" disabled style="opacity:.55;cursor:not-allowed">Checking availability…</button><button class="btn ghost" type="button" onclick="closeDoctorProfile()">Close</button></div></aside><section class="profileSection profileFeedbackSection"><div class="sectionHead" style="margin-bottom:8px"><div><div class="eyebrow">PATIENT FEEDBACK</div><h2 style="margin:0">Ratings & reviews</h2></div><div id="profileAvgLarge" style="font-size:22px;font-weight:900">— ★</div></div>${reviewRows}</section></div>`;
+  try{
+    if(typeof doctorProfileCache!=='undefined' && doctorProfileCache?.get){
+      doc=doctorProfileCache.get(doctorId)||null;
+    }
+  }catch(e){}
 
-  // Never block the visible profile on secondary calls.
-  Promise.allSettled([
-    (async()=>{try{const av=await sb.rpc('get_doctor_date_status',{p_doctor_id:id,p_date:todayKey});if(!av.error&&av.data){} }catch(e){}})(),
-    (async()=>{try{const r=await sb.rpc('get_doctor_reviews',{p_doctor_id:id});if(!r.error)reviews=(r.data||[]).slice(0,100);const avg=reviews.length?(reviews.reduce((a,x)=>a+Number(x.rating||0),0)/reviews.length):0;const a=document.getElementById('profileAvg');const al=document.getElementById('profileAvgLarge');const c=document.getElementById('profileReviewCount');if(a)a.textContent=avg?avg.toFixed(1):'—';if(al)al.textContent=(avg?avg.toFixed(1):'—')+' ★';if(c)c.textContent=String(reviews.length);const box=document.getElementById('profileReviewsLoading');if(box)box.outerHTML=reviews.length?reviews.map(r=>`<div class="reviewItem"><div class="reviewTop"><div><b>Patient</b><div class="stars">${starString(r.rating)}</div></div><span class="reviewDate">${formatReviewDate(r.created_at)}</span></div><p style="margin:8px 0 0;line-height:1.6">${esc(r.review||'')}</p>${r.reply?`<div class="reviewReply"><b>Doctor reply</b><div style="margin-top:4px;line-height:1.5">${esc(r.reply)}</div></div>`:''}</div>`).join(''):'<div class="notice">No reviews yet.</div>';}catch(e){const box=document.getElementById('profileReviewsLoading');if(box)box.textContent='Reviews could not be loaded right now.';}})(),
-    (async()=>{try{const q=await getPublicQueueState(id);const n=document.getElementById('profileQueueNow'),w=document.getElementById('profileQueueWaiting'),a=document.getElementById('profileQueueActive');if(n)n.textContent=(doctorOpenNow?'Now serving ':'Last served token ')+(q.current||0);if(w)w.textContent=(doctorOpenNow?(q.waiting||0)+' waiting':'Live waiting count is shown during clinic hours');if(a)a.textContent='🎟️ '+(q.activeBookings||0)+' active bookings';}catch(e){}})(),
-    (async()=>{try{await updateDoctorBookingDate(id);}catch(e){console.warn('booking date check failed',e);const b=document.querySelector('#doctorProfileContent .bookingPrimary');if(b){b.disabled=true;b.textContent='⚠️ Availability check failed';}}})()
-  ]);
-  subscribeDoctorProfileQueue(id);
-  selectReviewRating(5);
+  try{
+    if(!doc && window.__DOCTOR_CACHE){
+      doc=window.__DOCTOR_CACHE[doctorId]||null;
+    }
+  }catch(e){}
+
+  if(!doc){
+    try{
+      const cards=[...document.querySelectorAll('.doctorCard')];
+      const card=cards.find(el=>el.innerHTML.includes(doctorId));
+      if(card){
+        const name=card.querySelector('.docName')?.textContent?.trim()||'Doctor';
+        const spec=card.querySelector('.docSpec')?.textContent?.trim()||'Doctor';
+        const rating=card.querySelector('.rating')?.textContent?.trim()||'';
+        const meta=[...card.querySelectorAll('.docMeta span')].map(x=>x.textContent.trim());
+        const fee=card.querySelector('.fee')?.textContent?.replace('/ consultation','').trim()||'';
+        const img=card.querySelector('.docImg')?.src||'';
+
+        doc={
+          id:doctorId,
+          name:name,
+          specialty:spec,
+          city:(meta.find(x=>x.includes('📍'))||'').replace('📍','').trim(),
+          clinic_name:'Clinic',
+          clinic_start_time:'09:00',
+          clinic_end_time:'17:00',
+          fee:fee.replace(/[^\d.]/g,'')||0,
+          rating_avg:'',
+          review_count:'',
+          image_url:img
+        };
+      }
+    }catch(e){}
+  }
+
+  if(!doc){
+    profileContent.innerHTML='<div class="panel" style="margin:20px;max-width:620px;margin-left:auto;margin-right:auto"><h3>Doctor profile unavailable</h3><p style="color:var(--muted)">Doctor information could not be loaded.</p></div>';
+    return;
+  }
+
+  const escSafe=(v)=>{
+    try{return typeof esc==='function'?esc(String(v??'')):String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
+    catch(e){return String(v??'');}
+  };
+
+  const name=escSafe(doc.name||'Doctor');
+  const specialty=escSafe(
+    (typeof storedDoctorCategory==='function'&&storedDoctorCategory(doc)) ||
+    doc.specialty ||
+    (typeof storedDoctorSpecialties==='function'&&storedDoctorSpecialties(doc)) ||
+    'Doctor'
+  );
+  const clinic=escSafe(doc.clinic_name||doc.clinic_address||'Clinic');
+  const city=escSafe(doc.city||'');
+  const start=escSafe(doc.clinic_start_time||'09:00');
+  const finish=escSafe(doc.clinic_end_time||'17:00');
+  const fee=Number(doc.fee||0).toLocaleString();
+  const rating=doc.rating_avg?Number(doc.rating_avg).toFixed(1):'—';
+  const reviews=doc.review_count?` • ${escSafe(doc.review_count)} reviews`:'';
+  const image=doc.image_url||doc.photo_url||doc.avatar_url||'';
+
+  profileContent.innerHTML=`
+    <div class="panel" style="margin:20px;max-width:680px;margin-left:auto;margin-right:auto">
+      <div style="display:flex;gap:16px;align-items:center">
+        ${image?`<img src="${escSafe(image)}" alt="Doctor" style="width:82px;height:82px;border-radius:50%;object-fit:cover">`:`<div style="width:82px;height:82px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#eef4ff;font-size:34px">🩺</div>`}
+        <div>
+          <h2 style="margin:0 0 5px">${name}</h2>
+          <div style="color:var(--muted)">${specialty}</div>
+          <div class="rating" style="margin-top:6px">★ ${rating}${reviews}</div>
+        </div>
+      </div>
+
+      <div style="margin-top:22px;display:grid;gap:10px">
+        <div>🏥 <strong>Clinic:</strong> ${clinic}</div>
+        <div>📍 <strong>City:</strong> ${city||'—'}</div>
+        <div>🕒 <strong>Timings:</strong> ${start} - ${finish}</div>
+        <div>💰 <strong>Consultation:</strong> Rs ${fee}</div>
+      </div>
+
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:22px">
+        <button class="btn primary" onclick="bookDoctor('${escSafe(doctorId)}')">Book Token</button>
+        <button class="btn light" onclick="document.getElementById('doctorProfileOverlay').style.display='none'">Close</button>
+      </div>
+    </div>`;
+
+  /* Optional live/background data refresh — never allowed to block the profile. */
+  try{
+    if(typeof getPublicQueueState==='function'){
+      Promise.resolve(getPublicQueueState(doctorId)).catch(()=>{});
+    }
+  }catch(e){}
 }
 async function hasPatientBooking(doctorId,userId){const {data,error}=await sb.from('bookings').select('id').eq('doctor_id',doctorId).eq('patient_id',userId).limit(1);return !error&&!!data?.length}
 function closeDoctorProfile(){document.getElementById('doctorProfileOverlay').style.display='none'; if(window.profileQueueChannel&&supabaseReady()){sb.removeChannel(window.profileQueueChannel);window.profileQueueChannel=null} if(window.profileQueueTimer){clearInterval(window.profileQueueTimer);window.profileQueueTimer=null}}
